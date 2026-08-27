@@ -141,6 +141,8 @@ fn test_no_trailing_newline() {
 }
 
 fn assert_spans_match(file_content: &str, gomod: &GoMod) {
+    assert_eq!(&file_content[gomod.module_span.clone()], gomod.module);
+
     for dependency in gomod.require.iter().chain(gomod.exclude.iter()) {
         let module = &dependency.module;
         assert_eq!(&file_content[module.path_span.clone()], module.module_path);

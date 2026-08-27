@@ -31,8 +31,9 @@
 //!
 //! Every parsed module path and version carries its [`Span`] — a byte offset
 //! range into the input — which makes the parser usable as a language server
-//! backend. Spans do not take part in [`PartialEq`], so values parsed from
-//! different offsets still compare equal by path and version:
+//! backend. The same holds for [`GoMod::module_span`] and for both sides of a
+//! `replace` directive. Spans do not take part in [`PartialEq`], so values
+//! parsed from different offsets still compare equal by path and version:
 //!
 //! ```rust
 //! use gomod_parser::GoMod;
@@ -60,10 +61,11 @@ use winnow::Parser;
 mod combinator;
 pub mod parser;
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct GoMod {
     pub comment: Vec<String>,
     pub module: String,
+    pub module_span: Span,
     pub go: Option<String>,
     pub godebug: HashMap<String, String>,
     pub tool: Vec<String>,
@@ -74,6 +76,24 @@ pub struct GoMod {
     pub retract: Vec<ModuleRetract>,
     pub ignore: Vec<String>,
 }
+
+impl PartialEq for GoMod {
+    fn eq(&self, other: &Self) -> bool {
+        self.comment == other.comment
+            && self.module == other.module
+            && self.go == other.go
+            && self.godebug == other.godebug
+            && self.tool == other.tool
+            && self.toolchain == other.toolchain
+            && self.require == other.require
+            && self.exclude == other.exclude
+            && self.replace == other.replace
+            && self.retract == other.retract
+            && self.ignore == other.ignore
+    }
+}
+
+impl Eq for GoMod {}
 
 impl std::str::FromStr for GoMod {
     type Err = String;
@@ -87,7 +107,10 @@ impl std::str::FromStr for GoMod {
         {
             match directive {
                 Directive::Comment(d) => res.comment.push((**d).to_string()),
-                Directive::Module(d) => res.module = (**d).to_string(),
+                Directive::Module(d, span) => {
+                    res.module = (**d).to_string();
+                    res.module_span = span.clone();
+                }
                 Directive::Go(d) => res.go = Some((**d).to_string()),
                 Directive::GoDebug(d) => res.godebug.extend((*d).clone()),
                 Directive::Tool(d) => res.tool.append(d),
@@ -246,6 +269,22 @@ mod tests {
             vec![ModuleRetract::Single("v1.0.0".to_string())]
         );
         assert_eq!(go_mod.comment, vec!["Complete example".to_string()]);
+    }
+
+    #[test]
+    fn test_module_span() {
+        let input = indoc! {r#"
+        // leading comment
+
+        module github.com/spans
+
+        go 1.24
+        "#};
+
+        let go_mod = GoMod::from_str(input).unwrap();
+
+        assert_eq!(go_mod.module, "github.com/spans".to_string());
+        assert_eq!(&input[go_mod.module_span.clone()], "github.com/spans");
     }
 
     #[test]

@@ -53,5 +53,11 @@ assert_eq!(&input[dependency.module.path_span.clone()], "golang.org/x/net");
 assert_eq!(&input[dependency.module.version_span.clone()], "v0.20.0");
 ```
 
+The `module` directive exposes its own `GoMod::module_span`, and `replace`
+directives carry the same pair of spans on `ModuleReplacement` — with
+`version_span` set to `None` for an unversioned source — plus the spans of the
+nested `Module` when the destination is a module rather than a file path. Use
+`Module::new` and `ModuleReplacement::new` to build values without spans.
+
 Spans are ignored by `PartialEq`, so values parsed from different files still
 compare equal by path and version.

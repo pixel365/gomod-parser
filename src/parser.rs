@@ -1,5 +1,5 @@
 use crate::combinator::not_whitespace;
-use crate::{Module, ModuleDependency, ModuleReplacement, ModuleRetract, Replacement};
+use crate::{Module, ModuleDependency, ModuleReplacement, ModuleRetract, Replacement, Span};
 use std::collections::HashMap;
 use winnow::ascii::{multispace0, multispace1, space0, space1};
 use winnow::combinator::{fail, not, opt, peek, preceded, repeat, terminated};
@@ -13,7 +13,7 @@ const CRLF: [char; 2] = ['\r', '\n'];
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Directive<'a> {
     Comment(&'a str),
-    Module(&'a str),
+    Module(&'a str, Span),
     Go(&'a str),
     GoDebug(HashMap<String, String>),
     Tool(Vec<String>),
@@ -59,10 +59,11 @@ fn comment<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
 }
 
 fn module<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
-    let res = preceded(("module", space1), take_till(1.., CRLF)).parse_next(input)?;
+    let (res, span) =
+        preceded(("module", space1), take_till(1.., CRLF).with_span()).parse_next(input)?;
     let _ = take_while(0.., CRLF).parse_next(input)?;
 
-    Ok(Directive::Module(res))
+    Ok(Directive::Module(res, span))
 }
 
 fn go<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
