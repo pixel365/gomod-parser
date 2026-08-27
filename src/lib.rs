@@ -288,6 +288,26 @@ mod tests {
     }
 
     #[test]
+    fn test_module_trailing_text() {
+        for (input, expected) in [
+            ("module github.com/spans // some comment\n", 7..23),
+            ("module github.com/spans   \n", 7..23),
+            ("module github.com/spans\r\n", 7..23),
+            ("module github.com/spans", 7..23),
+        ] {
+            let go_mod = GoMod::from_str(input).unwrap();
+
+            assert_eq!(
+                go_mod.module,
+                "github.com/spans".to_string(),
+                "input: {input:?}"
+            );
+            assert_eq!(go_mod.module_span, expected, "input: {input:?}");
+            assert_eq!(&input[go_mod.module_span.clone()], "github.com/spans");
+        }
+    }
+
+    #[test]
     fn test_require_spans() {
         let input = indoc! {r#"
         module github.com/spans

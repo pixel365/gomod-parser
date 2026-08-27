@@ -60,7 +60,10 @@ fn comment<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
 
 fn module<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let (res, span) =
-        preceded(("module", space1), take_till(1.., CRLF).with_span()).parse_next(input)?;
+        preceded(("module", space1), take_till(1.., WHITESPACES).with_span()).parse_next(input)?;
+
+    // remove any comments added to the same line
+    let _ = (space0, opt(comment)).parse_next(input)?;
     let _ = take_while(0.., CRLF).parse_next(input)?;
 
     Ok(Directive::Module(res, span))
