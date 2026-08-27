@@ -3,7 +3,7 @@ use crate::{Module, ModuleDependency, ModuleReplacement, ModuleRetract, Replacem
 use std::collections::HashMap;
 use winnow::ascii::{multispace0, multispace1, space0, space1};
 use winnow::combinator::{fail, not, opt, peek, preceded, repeat, terminated};
-use winnow::stream::AsChar;
+use winnow::stream::{AsChar, LocatingSlice};
 use winnow::token::{any, take_till, take_while};
 use winnow::{dispatch, Parser, Result};
 
@@ -25,15 +25,15 @@ pub(crate) enum Directive<'a> {
     Ignore(Vec<String>),
 }
 
-pub(crate) fn gomod<'a>(input: &mut &'a str) -> Result<Vec<Directive<'a>>> {
-    repeat(0.., |i: &mut &'a str| {
+pub(crate) fn gomod<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Vec<Directive<'a>>> {
+    repeat(0.., |i: &mut LocatingSlice<&'a str>| {
         // check for comments first
         comment.parse_next(i).or_else(|_| directive.parse_next(i))
     })
     .parse_next(input)
 }
 
-fn directive<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn directive<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let _ = take_while(0.., CRLF).parse_next(input)?;
     dispatch!(peek(not_whitespace);
         "module" => module,
@@ -51,28 +51,28 @@ fn directive<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
     .parse_next(input)
 }
 
-fn comment<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn comment<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded((opt(space0), "//", opt(space0)), take_till(0.., CRLF)).parse_next(input)?;
     let _ = take_while(0.., CRLF).parse_next(input)?;
 
     Ok(Directive::Comment(res))
 }
 
-fn module<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn module<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(("module", space1), take_till(1.., CRLF)).parse_next(input)?;
     let _ = take_while(0.., CRLF).parse_next(input)?;
 
     Ok(Directive::Module(res))
 }
 
-fn go<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn go<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(("go", space1), take_till(1.., CRLF)).parse_next(input)?;
     let _ = take_while(0.., CRLF).parse_next(input)?;
 
     Ok(Directive::Go(res))
 }
 
-fn godebug<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn godebug<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(
         ("godebug", space1),
         dispatch! {peek(any);
@@ -86,7 +86,7 @@ fn godebug<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
     Ok(Directive::GoDebug(HashMap::from_iter(res)))
 }
 
-fn godebug_single(input: &mut &str) -> Result<Vec<(String, String)>> {
+fn godebug_single(input: &mut LocatingSlice<&str>) -> Result<Vec<(String, String)>> {
     // terminate, if `)` is found
     peek(not(')')).parse_next(input)?;
 
@@ -96,7 +96,7 @@ fn godebug_single(input: &mut &str) -> Result<Vec<(String, String)>> {
     Ok(vec![(key.into(), value.into())])
 }
 
-fn godebug_multi(input: &mut &str) -> Result<Vec<(String, String)>> {
+fn godebug_multi(input: &mut LocatingSlice<&str>) -> Result<Vec<(String, String)>> {
     let _ = ("(", multispace1).parse_next(input)?;
     let res: Vec<Vec<(String, String)>> =
         repeat(1.., terminated(godebug_single, multispace0)).parse_next(input)?;
@@ -105,7 +105,7 @@ fn godebug_multi(input: &mut &str) -> Result<Vec<(String, String)>> {
     Ok(res.into_iter().flatten().collect::<Vec<(String, String)>>())
 }
 
-fn tool<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn tool<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(
         ("tool", space1),
         dispatch! {peek(any);
@@ -119,7 +119,7 @@ fn tool<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
     Ok(Directive::Tool(res))
 }
 
-fn tool_single(input: &mut &str) -> Result<Vec<String>> {
+fn tool_single(input: &mut LocatingSlice<&str>) -> Result<Vec<String>> {
     // terminate, if `)` is found
     peek(not(')')).parse_next(input)?;
 
@@ -131,7 +131,7 @@ fn tool_single(input: &mut &str) -> Result<Vec<String>> {
     Ok(vec![value.into()])
 }
 
-fn tool_multi(input: &mut &str) -> Result<Vec<String>> {
+fn tool_multi(input: &mut LocatingSlice<&str>) -> Result<Vec<String>> {
     let _ = ("(", multispace1).parse_next(input)?;
     let res: Vec<Vec<String>> =
         repeat(1.., terminated(tool_single, multispace0)).parse_next(input)?;
@@ -140,14 +140,14 @@ fn tool_multi(input: &mut &str) -> Result<Vec<String>> {
     Ok(res.into_iter().flatten().collect::<Vec<String>>())
 }
 
-fn toolchain<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn toolchain<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(("toolchain", space1), take_till(1.., CRLF)).parse_next(input)?;
     let _ = take_while(0.., CRLF).parse_next(input)?;
 
     Ok(Directive::Toolchain(res))
 }
 
-fn require<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn require<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(
         ("require", space1),
         dispatch! {peek(any);
@@ -161,14 +161,14 @@ fn require<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
     Ok(Directive::Require(res))
 }
 
-fn require_single(input: &mut &str) -> Result<Vec<ModuleDependency>> {
+fn require_single(input: &mut LocatingSlice<&str>) -> Result<Vec<ModuleDependency>> {
     // terminate, if `)` is found
     peek(not(')')).parse_next(input)?;
 
-    let (module_path, _, version) = (
-        take_till(1.., AsChar::is_space),
+    let ((module_path, path_span), _, (version, version_span)) = (
+        take_till(1.., AsChar::is_space).with_span(),
         space1,
-        take_till(1.., WHITESPACES),
+        take_till(1.., WHITESPACES).with_span(),
     )
         .parse_next(input)?;
 
@@ -178,12 +178,14 @@ fn require_single(input: &mut &str) -> Result<Vec<ModuleDependency>> {
         module: Module {
             module_path: module_path.to_string(),
             version: version.to_string(),
+            path_span,
+            version_span,
         },
         indirect,
     }])
 }
 
-fn require_multi(input: &mut &str) -> Result<Vec<ModuleDependency>> {
+fn require_multi(input: &mut LocatingSlice<&str>) -> Result<Vec<ModuleDependency>> {
     let _ = ("(", multispace1).parse_next(input)?;
     let res: Vec<Vec<ModuleDependency>> =
         repeat(1.., terminated(require_single, multispace0)).parse_next(input)?;
@@ -192,7 +194,7 @@ fn require_multi(input: &mut &str) -> Result<Vec<ModuleDependency>> {
     Ok(res.into_iter().flatten().collect::<Vec<ModuleDependency>>())
 }
 
-fn exclude<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn exclude<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(
         ("exclude", space1),
         dispatch! {peek(any);
@@ -206,7 +208,7 @@ fn exclude<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
     Ok(Directive::Exclude(res))
 }
 
-fn replace<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn replace<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(
         ("replace", space1),
         dispatch! {peek(any);
@@ -220,43 +222,57 @@ fn replace<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
     Ok(Directive::Replace(res))
 }
 
-fn replace_single(input: &mut &str) -> Result<Vec<ModuleReplacement>> {
+fn replace_single(input: &mut LocatingSlice<&str>) -> Result<Vec<ModuleReplacement>> {
     // terminate, if `)` is found
     peek(not(')')).parse_next(input)?;
 
-    let (src_path, src_version) = (
-        terminated(take_till(1.., AsChar::is_space), space1),
+    let ((src_path, src_path_span), src_version) = (
+        terminated(take_till(1.., AsChar::is_space).with_span(), space1),
         opt(terminated(
-            preceded(peek(not("=>")), take_till(1.., AsChar::is_space)),
+            preceded(
+                peek(not("=>")),
+                take_till(1.., AsChar::is_space).with_span(),
+            ),
             space1,
         )),
     )
         .parse_next(input)?;
     let _ = ("=>", space1).parse_next(input)?;
-    let (dest_path, dest_version) = (
-        terminated(take_till(1.., WHITESPACES), space0),
-        opt(terminated(take_till(1.., WHITESPACES), multispace1)),
+    let ((dest_path, dest_path_span), dest_version) = (
+        terminated(take_till(1.., WHITESPACES).with_span(), space0),
+        opt(terminated(
+            take_till(1.., WHITESPACES).with_span(),
+            multispace1,
+        )),
     )
         .parse_next(input)?;
 
     let replacement = dest_version.map_or_else(
         || Replacement::FilePath(dest_path.to_string()),
-        |version| {
+        |(version, version_span)| {
             Replacement::Module(Module {
                 module_path: dest_path.to_string(),
                 version: version.to_string(),
+                path_span: dest_path_span,
+                version_span,
             })
         },
     );
 
+    let (src_version, src_version_span) = src_version.map_or((None, None), |(version, span)| {
+        (Some(version.to_string()), Some(span))
+    });
+
     Ok(vec![ModuleReplacement {
         module_path: src_path.to_string(),
-        version: src_version.map(ToString::to_string),
+        version: src_version,
+        path_span: src_path_span,
+        version_span: src_version_span,
         replacement,
     }])
 }
 
-fn replace_multi(input: &mut &str) -> Result<Vec<ModuleReplacement>> {
+fn replace_multi(input: &mut LocatingSlice<&str>) -> Result<Vec<ModuleReplacement>> {
     let _ = ("(", multispace1).parse_next(input)?;
     let res: Vec<Vec<ModuleReplacement>> =
         repeat(1.., terminated(replace_single, multispace0)).parse_next(input)?;
@@ -268,7 +284,7 @@ fn replace_multi(input: &mut &str) -> Result<Vec<ModuleReplacement>> {
         .collect::<Vec<ModuleReplacement>>())
 }
 
-fn retract<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn retract<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(
         ("retract", space1),
         dispatch! {peek(any);
@@ -282,7 +298,7 @@ fn retract<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
     Ok(Directive::Retract(res))
 }
 
-fn retract_single(input: &mut &str) -> Result<Vec<ModuleRetract>> {
+fn retract_single(input: &mut LocatingSlice<&str>) -> Result<Vec<ModuleRetract>> {
     // terminate, if `)` is found
     peek(not(')')).parse_next(input)?;
 
@@ -298,7 +314,7 @@ fn retract_single(input: &mut &str) -> Result<Vec<ModuleRetract>> {
     Ok(vec![res])
 }
 
-fn version_range(input: &mut &str) -> Result<ModuleRetract> {
+fn version_range(input: &mut LocatingSlice<&str>) -> Result<ModuleRetract> {
     let lower_bound = preceded('[', take_till(1.., |c| c == ',' || c == ' ')).parse_next(input)?;
     let _ = (',', space0).parse_next(input)?;
     let upper_bound =
@@ -310,13 +326,13 @@ fn version_range(input: &mut &str) -> Result<ModuleRetract> {
     ))
 }
 
-fn version_single(input: &mut &str) -> Result<ModuleRetract> {
+fn version_single(input: &mut LocatingSlice<&str>) -> Result<ModuleRetract> {
     let version = terminated(take_till(1.., WHITESPACES), multispace1).parse_next(input)?;
 
     Ok(ModuleRetract::Single(version.to_string()))
 }
 
-fn retract_multi(input: &mut &str) -> Result<Vec<ModuleRetract>> {
+fn retract_multi(input: &mut LocatingSlice<&str>) -> Result<Vec<ModuleRetract>> {
     let _ = ("(", multispace1).parse_next(input)?;
     let res: Vec<Vec<ModuleRetract>> =
         repeat(1.., terminated(retract_single, multispace0)).parse_next(input)?;
@@ -325,7 +341,7 @@ fn retract_multi(input: &mut &str) -> Result<Vec<ModuleRetract>> {
     Ok(res.into_iter().flatten().collect::<Vec<ModuleRetract>>())
 }
 
-fn ignore<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
+fn ignore<'a>(input: &mut LocatingSlice<&'a str>) -> Result<Directive<'a>> {
     let res = preceded(
         ("ignore", space1),
         dispatch! {peek(any);
@@ -339,7 +355,7 @@ fn ignore<'a>(input: &mut &'a str) -> Result<Directive<'a>> {
     Ok(Directive::Ignore(res))
 }
 
-fn ignore_single(input: &mut &str) -> Result<Vec<String>> {
+fn ignore_single(input: &mut LocatingSlice<&str>) -> Result<Vec<String>> {
     // terminate, if `)` is found
     peek(not(')')).parse_next(input)?;
 
@@ -351,7 +367,7 @@ fn ignore_single(input: &mut &str) -> Result<Vec<String>> {
     Ok(vec![path.to_string()])
 }
 
-fn ignore_multi(input: &mut &str) -> Result<Vec<String>> {
+fn ignore_multi(input: &mut LocatingSlice<&str>) -> Result<Vec<String>> {
     let _ = ("(", multispace1).parse_next(input)?;
     let res: Vec<Vec<String>> =
         repeat(1.., terminated(ignore_single, multispace0)).parse_next(input)?;

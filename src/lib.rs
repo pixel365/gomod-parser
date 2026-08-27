@@ -21,13 +21,30 @@
 //! assert_eq!(
 //!     go_mod.require,
 //!     vec![ModuleDependency {
-//!         module: Module {
-//!             module_path: "golang.org/x/net".to_string(),
-//!             version: "v0.20.0".to_string()
-//!         },
+//!         module: Module::new("golang.org/x/net", "v0.20.0"),
 //!         indirect: false
 //!     }]
 //! );
+//! ```
+//!
+//! # Positions
+//!
+//! Every parsed module path and version carries its [`Span`] — a byte offset
+//! range into the input — which makes the parser usable as a language server
+//! backend. Spans do not take part in [`PartialEq`], so values parsed from
+//! different offsets still compare equal by path and version:
+//!
+//! ```rust
+//! use gomod_parser::GoMod;
+//! use std::str::FromStr;
+//!
+//! let input = "module github.com/example\n\nrequire golang.org/x/net v0.20.0\n";
+//!
+//! let go_mod = GoMod::from_str(input).unwrap();
+//! let dependency = &go_mod.require[0];
+//!
+//! assert_eq!(&input[dependency.module.path_span.clone()], "golang.org/x/net");
+//! assert_eq!(&input[dependency.module.version_span.clone()], "v0.20.0");
 //! ```
 
 #![warn(clippy::pedantic)]
@@ -36,6 +53,8 @@
 
 use crate::parser::{gomod, Directive};
 use std::collections::HashMap;
+use std::ops::Range;
+use winnow::stream::LocatingSlice;
 use winnow::Parser;
 
 mod combinator;
@@ -62,7 +81,10 @@ impl std::str::FromStr for GoMod {
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let mut res = Self::default();
 
-        for directive in &mut gomod.parse(input).map_err(|e| e.to_string())? {
+        for directive in &mut gomod
+            .parse(LocatingSlice::new(input))
+            .map_err(|e| e.to_string())?
+        {
             match directive {
                 Directive::Comment(d) => res.comment.push((**d).to_string()),
                 Directive::Module(d) => res.module = (**d).to_string(),
@@ -82,11 +104,35 @@ impl std::str::FromStr for GoMod {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+pub type Span = Range<usize>;
+
+#[derive(Debug)]
 pub struct Module {
     pub module_path: String,
     pub version: String,
+    pub path_span: Span,
+    pub version_span: Span,
 }
+
+impl Module {
+    #[must_use]
+    pub fn new(module_path: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            module_path: module_path.into(),
+            version: version.into(),
+            path_span: 0..0,
+            version_span: 0..0,
+        }
+    }
+}
+
+impl PartialEq for Module {
+    fn eq(&self, other: &Self) -> bool {
+        self.module_path == other.module_path && self.version == other.version
+    }
+}
+
+impl Eq for Module {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ModuleDependency {
@@ -94,12 +140,41 @@ pub struct ModuleDependency {
     pub indirect: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct ModuleReplacement {
     pub module_path: String,
     pub version: Option<String>,
+    pub path_span: Span,
+    pub version_span: Option<Span>,
     pub replacement: Replacement,
 }
+
+impl ModuleReplacement {
+    #[must_use]
+    pub fn new(
+        module_path: impl Into<String>,
+        version: Option<String>,
+        replacement: Replacement,
+    ) -> Self {
+        Self {
+            module_path: module_path.into(),
+            version,
+            path_span: 0..0,
+            version_span: None,
+            replacement,
+        }
+    }
+}
+
+impl PartialEq for ModuleReplacement {
+    fn eq(&self, other: &Self) -> bool {
+        self.module_path == other.module_path
+            && self.version == other.version
+            && self.replacement == other.replacement
+    }
+}
+
+impl Eq for ModuleReplacement {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Replacement {
@@ -147,39 +222,115 @@ mod tests {
         assert_eq!(
             go_mod.require,
             vec![ModuleDependency {
-                module: Module {
-                    module_path: "golang.org/x/net".to_string(),
-                    version: "v0.20.0".to_string()
-                },
+                module: Module::new("golang.org/x/net", "v0.20.0"),
                 indirect: false
             }]
         );
         assert_eq!(
             go_mod.exclude,
             vec![ModuleDependency {
-                module: Module {
-                    module_path: "golang.org/x/net".to_string(),
-                    version: "v0.19.1".to_string()
-                },
+                module: Module::new("golang.org/x/net", "v0.19.1"),
                 indirect: false
             }]
         );
         assert_eq!(
             go_mod.replace,
-            vec![ModuleReplacement {
-                module_path: "golang.org/x/net".to_string(),
-                version: Some("v0.19.0".to_string()),
-                replacement: Replacement::Module(Module {
-                    module_path: "example.com/fork/net".to_string(),
-                    version: "v0.19.1".to_string(),
-                })
-            }]
+            vec![ModuleReplacement::new(
+                "golang.org/x/net",
+                Some("v0.19.0".to_string()),
+                Replacement::Module(Module::new("example.com/fork/net", "v0.19.1"))
+            )]
         );
         assert_eq!(
             go_mod.retract,
             vec![ModuleRetract::Single("v1.0.0".to_string())]
         );
         assert_eq!(go_mod.comment, vec!["Complete example".to_string()]);
+    }
+
+    #[test]
+    fn test_require_spans() {
+        let input = indoc! {r#"
+        module github.com/spans
+
+        require (
+            golang.org/x/net v0.20.0
+            golang.org/x/sys v0.16.0 // indirect
+        )
+        "#};
+
+        let go_mod = GoMod::from_str(input).unwrap();
+
+        let net = &go_mod.require[0].module;
+        assert_eq!(&input[net.path_span.clone()], "golang.org/x/net");
+        assert_eq!(&input[net.version_span.clone()], "v0.20.0");
+
+        let sys = &go_mod.require[1].module;
+        assert_eq!(&input[sys.path_span.clone()], "golang.org/x/sys");
+        assert_eq!(&input[sys.version_span.clone()], "v0.16.0");
+
+        assert!(net.version_span.end < sys.path_span.start);
+    }
+
+    #[test]
+    fn test_exclude_spans() {
+        let input = indoc! {r#"
+        module github.com/spans
+
+        exclude golang.org/x/net v0.19.1
+        "#};
+
+        let go_mod = GoMod::from_str(input).unwrap();
+
+        let module = &go_mod.exclude[0].module;
+        assert_eq!(&input[module.path_span.clone()], "golang.org/x/net");
+        assert_eq!(&input[module.version_span.clone()], "v0.19.1");
+    }
+
+    #[test]
+    fn test_replace_spans() {
+        let input = indoc! {r#"
+        module github.com/spans
+
+        replace (
+            golang.org/x/net v0.19.0 => example.com/fork/net v0.19.1
+            golang.org/x/sys => ../sys
+        )
+        "#};
+
+        let go_mod = GoMod::from_str(input).unwrap();
+
+        let versioned = &go_mod.replace[0];
+        assert_eq!(&input[versioned.path_span.clone()], "golang.org/x/net");
+        assert_eq!(&input[versioned.version_span.clone().unwrap()], "v0.19.0");
+        match &versioned.replacement {
+            Replacement::Module(module) => {
+                assert_eq!(&input[module.path_span.clone()], "example.com/fork/net");
+                assert_eq!(&input[module.version_span.clone()], "v0.19.1");
+            }
+            Replacement::FilePath(path) => panic!("unexpected file path replacement: {path}"),
+        }
+
+        let unversioned = &go_mod.replace[1];
+        assert_eq!(&input[unversioned.path_span.clone()], "golang.org/x/sys");
+        assert_eq!(unversioned.version_span, None);
+    }
+
+    #[test]
+    fn test_spans_ignored_by_eq() {
+        let input = indoc! {r#"
+        module github.com/spans
+
+        require golang.org/x/net v0.20.0
+        "#};
+
+        let go_mod = GoMod::from_str(input).unwrap();
+
+        assert_ne!(go_mod.require[0].module.version_span, 0..0);
+        assert_eq!(
+            go_mod.require[0].module,
+            Module::new("golang.org/x/net", "v0.20.0")
+        );
     }
 
     #[test]
@@ -277,10 +428,7 @@ mod tests {
         assert_eq!(
             go_mod.require,
             vec![ModuleDependency {
-                module: Module {
-                    module_path: "golang.org/x/net".to_string(),
-                    version: "v0.20.0".to_string()
-                },
+                module: Module::new("golang.org/x/net", "v0.20.0"),
                 indirect: false
             }]
         );
